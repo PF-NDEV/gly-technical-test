@@ -2,12 +2,17 @@ import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { CarbonEmissionFactor } from "../carbonEmissionFactor/carbonEmissionFactor.entity";
+import { EmissionFactorNotFoundException } from "../carbonEmissionFactor/carbonEmissionFactor.exception";
+import { DomainException } from "../common/domain.exception";
 import { CreateFoodProductDto } from "./dto/food-product.dto";
 import { FoodProduct } from "./foodProduct.entity";
+import { InvalidIngredientException } from "./foodProduct.exception";
 import { FoodProductIngredient } from "./foodProductIngredient.entity";
 
 @Injectable()
 export class FoodProductService {
+  private readonly logger = new Logger(FoodProductService.name);
+
   constructor(
     @InjectRepository(FoodProduct)
     private foodProductRepository: Repository<FoodProduct>,
@@ -27,10 +32,16 @@ export class FoodProductService {
       });
 
       if (!emissionFactor) {
-        Logger.warn(
+        this.logger.warn(
           `No emission factor found for ingredient ${ingredient.name} with unit ${ingredient.unit}`
         );
-        return null;
+        throw new EmissionFactorNotFoundException(ingredient.name, ingredient.unit);
+      }
+
+      if (ingredient.quantity < 0) {
+        throw new InvalidIngredientException(
+          `Invalid quantity ${ingredient.quantity} for ingredient ${ingredient.name}`
+        );
       }
 
       totalFootprint += ingredient.quantity * emissionFactor.emissionCO2eInKgPerUnit;
@@ -40,17 +51,25 @@ export class FoodProductService {
   }
 
   async create(createFoodProductDto: CreateFoodProductDto): Promise<FoodProduct> {
-    const ingredients = createFoodProductDto.ingredients.map(
-      (i) => new FoodProductIngredient(i)
-    );
+    try {
+      const ingredients = createFoodProductDto.ingredients.map(
+        i => new FoodProductIngredient(i)
+      );
 
-    const product = new FoodProduct({
-      name: createFoodProductDto.name,
-      ingredients: ingredients
-    });
+      const product = new FoodProduct({
+        name: createFoodProductDto.name,
+        ingredients: ingredients
+      });
 
-    product.carbonFootprint = await this.calculateCarbonFootprint(ingredients);
-    return this.foodProductRepository.save(product);
+      product.carbonFootprint = await this.calculateCarbonFootprint(ingredients);
+      return this.foodProductRepository.save(product);
+    } catch (error) {
+      if (error instanceof DomainException) {
+        throw error;
+      }
+      this.logger.error('Error creating food product', error);
+      throw new Error('Failed to create food product');
+    }
   }
 
   async findOne(id: number): Promise<FoodProduct | null> {

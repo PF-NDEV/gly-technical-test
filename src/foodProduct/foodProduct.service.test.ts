@@ -1,5 +1,6 @@
 import { GreenlyDataSource, dataSource } from "../../config/dataSource";
 import { CarbonEmissionFactor } from "../carbonEmissionFactor/carbonEmissionFactor.entity";
+import { EmissionFactorNotFoundException } from "../carbonEmissionFactor/carbonEmissionFactor.exception";
 import { FoodProduct } from "./foodProduct.entity";
 import { FoodProductService } from "./foodProduct.service";
 import { FoodProductIngredient } from "./foodProductIngredient.entity";
@@ -73,22 +74,18 @@ describe("FoodProduct.service", () => {
       expect(result).toBe(1.2); // (2 * 0.5) + (1 * 0.2)
     });
 
-    it("should return null when any emission factor is missing", async () => {
+    it("should throw EmissionFactorNotFoundException when emission factor is missing", async () => {
       const ingredients = [
-        new FoodProductIngredient({
-          name: "flour",
-          quantity: 2,
-          unit: "kg"
-        }),
         new FoodProductIngredient({
           name: "unknown",
           quantity: 1,
           unit: "kg"
         })
       ];
-
-      const result = await foodProductService.calculateCarbonFootprint(ingredients);
-      expect(result).toBeNull();
+  
+      await expect(foodProductService.calculateCarbonFootprint(ingredients))
+        .rejects
+        .toThrow(EmissionFactorNotFoundException);
     });
 
     it("should handle different units for same ingredient", async () => {
@@ -118,6 +115,7 @@ describe("FoodProduct.service", () => {
     });
   });
 
+
   describe("create", () => {
     it("should create product with calculated carbon footprint", async () => {
       const createDTO = {
@@ -137,7 +135,7 @@ describe("FoodProduct.service", () => {
       expect(product.ingredients[0].name).toBe("flour");
     });
 
-    it("should create product with null carbon footprint when missing factors", async () => {
+    it("should throw EmissionFactorNotFoundException when creating product with missing factors", async () => {
       const createDTO = {
         name: "Test Product",
         ingredients: [{
@@ -147,11 +145,9 @@ describe("FoodProduct.service", () => {
         }]
       };
 
-      const product = await foodProductService.create(createDTO);
-      
-      expect(product.name).toBe("Test Product");
-      expect(product.carbonFootprint).toBeNull();
-      expect(product.ingredients).toHaveLength(1);
+      await expect(foodProductService.create(createDTO))
+        .rejects
+        .toThrow(EmissionFactorNotFoundException);
     });
 
     it("should create product with multiple ingredients", async () => {
