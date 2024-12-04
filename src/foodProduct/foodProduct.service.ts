@@ -1,10 +1,8 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { CarbonEmissionFactor } from "../carbonEmissionFactor/carbonEmissionFactor.entity";
-import { EmissionFactorNotFoundException } from "../carbonEmissionFactor/carbonEmissionFactor.exception";
 import { CacheService } from "../common/cache.service";
-import { DomainException } from "../common/domain.exception";
 import { CreateFoodProductDto } from "./dto/food-product.dto";
 import { FoodProduct } from "./foodProduct.entity";
 import { FoodProductIngredient } from "./foodProductIngredient.entity";
@@ -21,18 +19,25 @@ export class FoodProductService {
     private readonly cacheService: CacheService
   ) {}
 
-  private async getEmissionFactor(name: string, unit: string): Promise<CarbonEmissionFactor | null> {
+  private async getEmissionFactor(
+    name: string,
+    unit: string
+  ): Promise<CarbonEmissionFactor | null> {
     const cacheKey = `emission-factor:${name}:${unit}`;
-    
+
     const cached = await this.cacheService.get<CarbonEmissionFactor>(cacheKey);
     if (cached) {
-      this.logger.debug(`Cache HIT: Found emission factor for ${name}:${unit} in cache`);
+      this.logger.debug(
+        `Cache HIT: Found emission factor for ${name}:${unit} in cache`
+      );
       return cached;
     }
 
-    this.logger.debug(`Cache MISS: Fetching emission factor for ${name}:${unit} from database`);
+    this.logger.debug(
+      `Cache MISS: Fetching emission factor for ${name}:${unit} from database`
+    );
     const factor = await this.carbonEmissionFactorRepository.findOne({
-      where: { name, unit }
+      where: { name, unit },
     });
 
     if (factor) {
@@ -43,24 +48,38 @@ export class FoodProductService {
     return factor;
   }
 
-  async calculateCarbonFootprint(ingredients: FoodProductIngredient[]): Promise<number> {
-    this.logger.debug(`Starting carbon footprint calculation for ${ingredients.length} ingredients`);
+  async calculateCarbonFootprint(
+    ingredients: FoodProductIngredient[]
+  ): Promise<number> {
+    this.logger.debug(
+      `Starting carbon footprint calculation for ${ingredients.length} ingredients`
+    );
     let totalFootprint = 0;
 
     for (const ingredient of ingredients) {
-      this.logger.debug(`Processing ingredient: ${ingredient.name} (${ingredient.quantity} ${ingredient.unit})`);
-      
-      const emissionFactor = await this.getEmissionFactor(ingredient.name, ingredient.unit);
+      this.logger.debug(
+        `Processing ingredient: ${ingredient.name} (${ingredient.quantity} ${ingredient.unit})`
+      );
+
+      const emissionFactor = await this.getEmissionFactor(
+        ingredient.name,
+        ingredient.unit
+      );
 
       if (!emissionFactor) {
-        this.logger.warn(
-          `No emission factor found for ingredient ${ingredient.name} with unit ${ingredient.unit}`
-        );
-        throw new EmissionFactorNotFoundException(ingredient.name, ingredient.unit);
+        const message = `No emission factor found for ingredient ${ingredient.name} with unit ${ingredient.unit}`;
+        this.logger.warn(message);
+        throw new BadRequestException({
+          message,
+          code: "EMISSION_FACTOR_NOT_FOUND",
+        });
       }
 
-      const ingredientFootprint = ingredient.quantity * emissionFactor.emissionCO2eInKgPerUnit;
-      this.logger.debug(`Calculated footprint for ${ingredient.name}: ${ingredientFootprint}`);
+      const ingredientFootprint =
+        ingredient.quantity * emissionFactor.emissionCO2eInKgPerUnit;
+      this.logger.debug(
+        `Calculated footprint for ${ingredient.name}: ${ingredientFootprint}`
+      );
       totalFootprint += ingredientFootprint;
     }
 
@@ -68,26 +87,20 @@ export class FoodProductService {
     return totalFootprint;
   }
 
-  async create(createFoodProductDto: CreateFoodProductDto): Promise<FoodProduct> {
-    try {
-      const ingredients = createFoodProductDto.ingredients.map(
-        i => new FoodProductIngredient(i)
-      );
+  async create(
+    createFoodProductDto: CreateFoodProductDto
+  ): Promise<FoodProduct> {
+    const ingredients = createFoodProductDto.ingredients.map(
+      (i) => new FoodProductIngredient(i)
+    );
 
-      const product = new FoodProduct({
-        name: createFoodProductDto.name,
-        ingredients: ingredients
-      });
+    const product = new FoodProduct({
+      name: createFoodProductDto.name,
+      ingredients: ingredients,
+    });
 
-      product.carbonFootprint = await this.calculateCarbonFootprint(ingredients);
-      return this.foodProductRepository.save(product);
-    } catch (error) {
-      if (error instanceof DomainException) {
-        throw error;
-      }
-      this.logger.error('Error creating food product', error);
-      throw new Error('Failed to create food product');
-    }
+    product.carbonFootprint = await this.calculateCarbonFootprint(ingredients);
+    return this.foodProductRepository.save(product);
   }
 
   async findOne(id: number): Promise<FoodProduct | null> {
