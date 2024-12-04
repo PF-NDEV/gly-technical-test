@@ -1,18 +1,26 @@
 import { GreenlyDataSource, dataSource } from "../../config/dataSource";
 import { CarbonEmissionFactor } from "../carbonEmissionFactor/carbonEmissionFactor.entity";
 import { EmissionFactorNotFoundException } from "../carbonEmissionFactor/carbonEmissionFactor.exception";
+import { CacheService } from "../common/cache.service";
 import { FoodProduct } from "./foodProduct.entity";
 import { FoodProductService } from "./foodProduct.service";
 import { FoodProductIngredient } from "./foodProductIngredient.entity";
 
-let foodProductService: FoodProductService;
 let testEmissionFactors: CarbonEmissionFactor[];
+let foodProductService: FoodProductService;
+let mockCacheService: jest.Mocked<CacheService>;
 
 beforeAll(async () => {
   await dataSource.initialize();
+  mockCacheService = {
+    get: jest.fn(),
+    set: jest.fn()
+  } as any;
+
   foodProductService = new FoodProductService(
     dataSource.getRepository(FoodProduct),
-    dataSource.getRepository(CarbonEmissionFactor)
+    dataSource.getRepository(CarbonEmissionFactor),
+    mockCacheService
   );
 });
 
@@ -172,6 +180,47 @@ describe("FoodProduct.service", () => {
       expect(product.name).toBe("Test Product");
       expect(product.carbonFootprint).toBe(1.2);
       expect(product.ingredients).toHaveLength(2);
+    });
+  });
+
+  describe("caching behavior", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it("should use cache for repeated emission factor lookups", async () => {
+      // First call will be a cache miss
+      mockCacheService.get.mockResolvedValueOnce(undefined);
+      
+      // Subsequent calls will hit the cache
+      mockCacheService.get.mockResolvedValue({
+        name: "flour",
+        unit: "kg",
+        emissionCO2eInKgPerUnit: 0.5,
+        source: "Agrybalise"
+      });
+
+      const ingredients = [
+        new FoodProductIngredient({
+          name: "flour",
+          quantity: 2,
+          unit: "kg"
+        })
+      ];
+
+      // First calculation - should miss cache and query DB
+      await foodProductService.calculateCarbonFootprint(ingredients);
+      
+      // Second calculation - should hit cache
+      await foodProductService.calculateCarbonFootprint(ingredients);
+
+      // Verify one set operation occurred after the miss
+      expect(mockCacheService.set).toHaveBeenCalledTimes(1);
+      expect(mockCacheService.set).toHaveBeenCalledWith(
+        "emission-factor:flour:kg",
+        expect.any(Object),
+        3600
+      );
     });
   });
 });

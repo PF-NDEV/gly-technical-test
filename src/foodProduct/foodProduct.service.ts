@@ -3,6 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { CarbonEmissionFactor } from "../carbonEmissionFactor/carbonEmissionFactor.entity";
 import { EmissionFactorNotFoundException } from "../carbonEmissionFactor/carbonEmissionFactor.exception";
+import { CacheService } from "../common/cache.service";
 import { DomainException } from "../common/domain.exception";
 import { CreateFoodProductDto } from "./dto/food-product.dto";
 import { FoodProduct } from "./foodProduct.entity";
@@ -16,22 +17,40 @@ export class FoodProductService {
     @InjectRepository(FoodProduct)
     private foodProductRepository: Repository<FoodProduct>,
     @InjectRepository(CarbonEmissionFactor)
-    private carbonEmissionFactorRepository: Repository<CarbonEmissionFactor>
+    private carbonEmissionFactorRepository: Repository<CarbonEmissionFactor>,
+    private readonly cacheService: CacheService
   ) {}
 
+  private async getEmissionFactor(name: string, unit: string): Promise<CarbonEmissionFactor | null> {
+    const cacheKey = `emission-factor:${name}:${unit}`;
+    
+    const cached = await this.cacheService.get<CarbonEmissionFactor>(cacheKey);
+    if (cached) {
+      this.logger.debug(`Cache HIT: Found emission factor for ${name}:${unit} in cache`);
+      return cached;
+    }
+
+    this.logger.debug(`Cache MISS: Fetching emission factor for ${name}:${unit} from database`);
+    const factor = await this.carbonEmissionFactorRepository.findOne({
+      where: { name, unit }
+    });
+
+    if (factor) {
+      this.logger.debug(`Caching emission factor for ${name}:${unit}`);
+      await this.cacheService.set(cacheKey, factor, 3600);
+    }
+
+    return factor;
+  }
+
   async calculateCarbonFootprint(ingredients: FoodProductIngredient[]): Promise<number> {
-    this.logger.debug(`Calculating carbon footprint for ${ingredients.length} ingredients`);
+    this.logger.debug(`Starting carbon footprint calculation for ${ingredients.length} ingredients`);
     let totalFootprint = 0;
 
     for (const ingredient of ingredients) {
-      this.logger.debug(`Looking up emission factor for ${ingredient.name} (${ingredient.quantity} ${ingredient.unit})`);
+      this.logger.debug(`Processing ingredient: ${ingredient.name} (${ingredient.quantity} ${ingredient.unit})`);
       
-      const emissionFactor = await this.carbonEmissionFactorRepository.findOne({
-        where: {
-          name: ingredient.name,
-          unit: ingredient.unit,
-        },
-      });
+      const emissionFactor = await this.getEmissionFactor(ingredient.name, ingredient.unit);
 
       if (!emissionFactor) {
         this.logger.warn(
@@ -41,12 +60,11 @@ export class FoodProductService {
       }
 
       const ingredientFootprint = ingredient.quantity * emissionFactor.emissionCO2eInKgPerUnit;
-      this.logger.debug(`Carbon footprint for ${ingredient.name}: ${ingredientFootprint}`);
-      
+      this.logger.debug(`Calculated footprint for ${ingredient.name}: ${ingredientFootprint}`);
       totalFootprint += ingredientFootprint;
     }
 
-    this.logger.log(`Total carbon footprint calculated: ${totalFootprint}`);
+    this.logger.debug(`Total carbon footprint calculated: ${totalFootprint}`);
     return totalFootprint;
   }
 
