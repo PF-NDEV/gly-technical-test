@@ -6,7 +6,6 @@ import { EmissionFactorNotFoundException } from "../carbonEmissionFactor/carbonE
 import { DomainException } from "../common/domain.exception";
 import { CreateFoodProductDto } from "./dto/food-product.dto";
 import { FoodProduct } from "./foodProduct.entity";
-import { InvalidIngredientException } from "./foodProduct.exception";
 import { FoodProductIngredient } from "./foodProductIngredient.entity";
 
 @Injectable()
@@ -20,10 +19,13 @@ export class FoodProductService {
     private carbonEmissionFactorRepository: Repository<CarbonEmissionFactor>
   ) {}
 
-  async calculateCarbonFootprint(ingredients: FoodProductIngredient[]): Promise<number | null> {
+  async calculateCarbonFootprint(ingredients: FoodProductIngredient[]): Promise<number> {
+    this.logger.debug(`Calculating carbon footprint for ${ingredients.length} ingredients`);
     let totalFootprint = 0;
 
     for (const ingredient of ingredients) {
+      this.logger.debug(`Looking up emission factor for ${ingredient.name} (${ingredient.quantity} ${ingredient.unit})`);
+      
       const emissionFactor = await this.carbonEmissionFactorRepository.findOne({
         where: {
           name: ingredient.name,
@@ -38,15 +40,13 @@ export class FoodProductService {
         throw new EmissionFactorNotFoundException(ingredient.name, ingredient.unit);
       }
 
-      if (ingredient.quantity < 0) {
-        throw new InvalidIngredientException(
-          `Invalid quantity ${ingredient.quantity} for ingredient ${ingredient.name}`
-        );
-      }
-
-      totalFootprint += ingredient.quantity * emissionFactor.emissionCO2eInKgPerUnit;
+      const ingredientFootprint = ingredient.quantity * emissionFactor.emissionCO2eInKgPerUnit;
+      this.logger.debug(`Carbon footprint for ${ingredient.name}: ${ingredientFootprint}`);
+      
+      totalFootprint += ingredientFootprint;
     }
 
+    this.logger.log(`Total carbon footprint calculated: ${totalFootprint}`);
     return totalFootprint;
   }
 
